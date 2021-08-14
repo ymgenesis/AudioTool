@@ -116,6 +116,7 @@ AC3, also known as Dolby Digital, contains up to six discrete channels of sound.
 
 ## To Do
 
+- [ ] Add time until finished to encode options 
 - [x] Add ability to change input.mkv & output.mkv from main menu, so quitting and re-executing isn't required.
 - [x] Add channel layout condition check for options 3 & 4 to warn of 5.1 mixdown if input is 7.1.
 - [x] Check existence of subtitles in options 3 & 4 with `-map 0:s?`. Currently they fail if there are no subtitles present. 
