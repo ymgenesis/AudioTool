@@ -494,13 +494,25 @@ ac3 () {
 # Strip audio stream
 
 stripstream () {
-	ffmpeg \
+	echo "$(echo $(date '+%H:%M:%S') | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')" > "$ENCWD"/out.txt
+	(ffmpeg \
 	'-i' "$1" \
 	'-map' '0' \
 	'-map' -0:a:"$2" \
 	'-c' 'copy' \
 	'-v' 'fatal' '-stats' \
-	"$3"
+	"$3" 2>&1 | tee -a "$ENCWD"/out.txt &)
+	sleep 1
+	sspid=$(ps -ef | grep 'map 0 -map -0:a:' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	trap "kill $sspid 2> /dev/null" EXIT
+	while kill -0 $sspid 2> /dev/null; do
+		echo
+		timeleft "$4"
+		echo
+		sleep 2
+	done
+	trap - EXIT
+	
 }
 
 # Change Input and Output Paths & Files
@@ -903,7 +915,8 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 			5)
 	
 			clear
-			border "Strip Audio Stream"
+			ssheading='Strip Audio Stream'
+			border "${ssheading}"
 			echo
 			echo "Enter 0 to strip audio track 1: ${B}${AFORMAT0} ${ALAYOUT0}${D} – ${ATITLE0}"
 			echo "Enter 1 to strip audio track 2: ${B}${AFORMAT1} ${ALAYOUT1}${D} – ${ATITLE1}"
@@ -925,14 +938,13 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 				if [ "$STRIPANS" = "y" ] || [ "$STRIPANS" = "Y" ];
 				then
 					echo
-					echo "${C}Duration${D}: $(ffprobe -loglevel error -select_streams a:"$STRIPNUMBER" -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV")"
-					echo
-					stripstream "$INMKV" "$STRIPNUMBER" "$OUTMKV"
+					stripstream "$INMKV" "$STRIPNUMBER" "$OUTMKV" "$ssheading"
 					echo
 					echo "Complete!"
 					echo
 					outputinfo "$OUTMKV"
 					echo
+					rm "$ENCWD"/out.txt
 					break
 				elif [ "$STRIPANS" = "n" ] || [ "$STRIPANS" = "N" ];
 				then
