@@ -232,13 +232,95 @@ outputinfo () {
 	echo "a:6 (seventh audio track): ${B}${AOUTFORMAT6} ${AOUTLAYOUT6}${D} – ${AOUTTITLE6}"
 }
 
+# time left progress stats function
+
+sec2min()
+{
+ local S=${1}
+ ((h=S/3600))
+ ((m=S%3600/60))
+ ((s=S%60))
+ printf "%dh:%dm:%ds\n" "$h" "$m" "$s"
+}
+
+sec2hms () {
+    num=$1
+    min=0
+    hour=0
+    day=0
+    if((num>59));then
+        ((sec=num%60))
+        ((num=num/60))
+        if((num>59));then
+            ((min=num%60))
+            ((num=num/60))
+            if((num>23));then
+                ((hour=num%24))
+                ((day=num/24))
+            else
+                ((hour=num))
+            fi
+        else
+            ((min=num))
+        fi
+    else
+        ((sec=num))
+    fi
+    echo "$day"d "$hour"h "$min"m "$sec"s
+}
+
+timeleft () {
+	currenttime=$(date '+%H:%M:%S')
+	currenttimeseconds=$(echo "$currenttime" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+	starttimeseconds=$(head -n 1 "$ENCWD"/out.txt)
+	speed=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*speed=//; s/x.*//')
+	elapsed=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*time=//; s/\..*//')
+	sizekb=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*size=//; s/k.*//')
+	duration=$(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//')
+	durationseconds=$(echo "$duration" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+	timeleftseconds=$(echo "$durationseconds / $speed" | bc)
+	timeleftminutes=$(sec2min "$timeleftseconds")
+	elapsedseconds=$(echo "$elapsed" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+	durationleftseconds=$(($durationseconds - $elapsedseconds))
+	durationleftminutes=$(sec2min "$durationleftseconds")
+	endtimeseconds=$(($starttimeseconds + $timeleftseconds))
+	timeremainingseconds=$(($endtimeseconds - $currenttimeseconds))
+	timeremaininghms=$(sec2min "$timeremainingseconds")
+
+#	echo "Stats for Nerds:"
+#	echo
+#	echo "time at start (seconds): $starttimeseconds"
+#	echo "end time (seconds): $endtimeseconds"
+#	echo "speed multiplier: $speed"
+#	echo "total duration (h:m:s): $duration"
+#	echo "total duration (seconds): $durationseconds"
+#	echo "current time: $currenttime"
+#	echo "current time (seconds): $currenttimeseconds"
+#	echo "How long it'll take to encode (seconds): $timeleftseconds"
+#	echo "How long it'll take to encode (h:m:s): $timeleftminutes"
+#	echo "Duration left to encode (seconds): $durationleftseconds"
+#	echo "time left (seconds): $timeremainingseconds"
+#	echo "encoded duration so far (seconds): $elapsedseconds"
+
+	clear
+	border "$1"
+	echo
+	echo "Audio duration: $duration"
+	echo "Duration left to encode: $durationleftminutes"
+	echo "Encoded so far: $elapsed"
+	echo "Current size: "$(numfmt --from=iec --to=si "$sizekb"K)
+	echo "Approximate encode time: $timeleftminutes"
+	echo "Time until finished encoding: ${P}$timeremaininghms${D}"
+}
+
 ## Main Functions
 
 # TrueHD 7.1 to eac3 7.1
 
 thd () {
 	./EasyAudioEncoder &
-	EAE_ROOT="$ENCWD" FFMPEG_EXTERNAL_LIBS="$FFLIBS"/ X_PLEX_TOKEN='xxxxxxxxxxxxxxxxxxxx' ''${ENCWD}'/MacOS/Plex Transcoder' \
+	echo "$(echo $(date '+%H:%M:%S') | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')" > "$ENCWD"/out.txt
+	(EAE_ROOT="$ENCWD" FFMPEG_EXTERNAL_LIBS="$FFLIBS"/ X_PLEX_TOKEN='xxxxxxxxxxxxxxxxxxxx' ''${ENCWD}'/MacOS/Plex Transcoder' \
 	'-c:v:0' 'hevc' \
 	'-c:a:0' 'truehd_eae' \
 	'-noaccurate_seek' \
@@ -272,7 +354,19 @@ thd () {
 	'-vsync' 'cfr' \
 	'-avoid_negative_ts' 'disabled' \
 	'-v' 'fatal' '-stats' \
-	"$2"
+	"$2" 2>&1 | tee -a "$ENCWD"/out.txt &)
+	sleep 1
+	thdpid=$(ps -ef | grep 'Plex Transcoder -c:v:0 hevc -c:a:0 truehd_eae' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	eaepid=$(ps -ef | grep 'EasyAudioEncoder' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	trap "kill $thdpid 2> /dev/null" EXIT
+	trap "kill $eaepid 2> /dev/null" EXIT	
+	while kill -0 $thdpid 2> /dev/null; do
+		echo
+		timeleft "$3"
+		echo
+		sleep 2
+	done
+	trap - EXIT
 	echo
 	echo "Terminating EasyAudioEncoder..."
 	kill $(ps aux | grep -v grep | grep -v findandkill.sh | grep -i 'EasyAudioEncoder' | awk '{print $2}') > /dev/null 2>&1 || { echo "Failed. Either no running process(es) matching 'EasyAudioEncoder', or process(es) $1 belong(s) to root." ; exit 1; }
@@ -282,7 +376,8 @@ thd () {
 
 dts () {
 	./EasyAudioEncoder &
-	EAE_ROOT="$ENCWD" FFMPEG_EXTERNAL_LIBS="$FFLIBS"/ X_PLEX_TOKEN='xxxxxxxxxxxxxxxxxxxx' ''${ENCWD}'/MacOS/Plex Transcoder' \
+	echo "$(echo $(date '+%H:%M:%S') | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')" > "$ENCWD"/out.txt
+	(EAE_ROOT="$ENCWD" FFMPEG_EXTERNAL_LIBS="$FFLIBS"/ X_PLEX_TOKEN='xxxxxxxxxxxxxxxxxxxx' ''${ENCWD}'/MacOS/Plex Transcoder' \
 	'-c:v:0' 'hevc' \
 	'-c:a:0' 'dca' \
 	'-noaccurate_seek' \
@@ -316,7 +411,19 @@ dts () {
 	'-vsync' 'cfr' \
 	'-avoid_negative_ts' 'disabled' \
 	'-v' 'fatal' '-stats' \
-	"$2"
+	"$2" 2>&1 | tee -a "$ENCWD"/out.txt &)
+	sleep 1
+	dtspid=$(ps -ef | grep 'Plex Transcoder -c:v:0 hevc -c:a:0 dca' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	eaepid=$(ps -ef | grep 'EasyAudioEncoder' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	trap "kill $dtspid 2> /dev/null" EXIT
+	trap "kill $eaepid 2> /dev/null" EXIT	
+	while kill -0 $dtspid 2> /dev/null; do
+		echo
+		timeleft "$3"
+		echo
+		sleep 2
+	done
+	trap - EXIT
 	echo
 	echo "Terminating EasyAudioEncoder..."
 	kill $(ps aux | grep -v grep | grep -v findandkill.sh | grep -i 'EasyAudioEncoder' | awk '{print $2}') > /dev/null 2>&1 || { echo "Failed. Either no running process(es) matching 'EasyAudioEncoder', or process(es) $1 belong(s) to root." ; exit 1; }
@@ -325,7 +432,8 @@ dts () {
 # Any to eac3
 
 eac3 () {
-	ffmpeg \
+	echo "$(echo $(date '+%H:%M:%S') | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')" > "$ENCWD"/out.txt
+	(ffmpeg \
 	'-i' "$1" \
 	'-map' '0:v' \
 	'-map' '0:a:0' \
@@ -339,13 +447,24 @@ eac3 () {
 	'-c:a:1' 'eac3' \
 	'-b:a:1' '640k' \
 	'-v' 'fatal' '-stats' \
-	"$2"
+	"$2" 2>&1 | tee -a "$ENCWD"/out.txt &)
+	sleep 1
+	eac3pid=$(ps -ef | grep 'EAC3 640kbps -metadata:s:a:1 language' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	trap "kill $eac3pid 2> /dev/null" EXIT
+	while kill -0 $eac3pid 2> /dev/null; do
+		echo
+		timeleft "$3"
+		echo
+		sleep 2
+	done
+	trap - EXIT
 }
 
 # Any to ac3
 
 ac3 () {
-	ffmpeg \
+	echo "$(echo $(date '+%H:%M:%S') | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')" > "$ENCWD"/out.txt
+	(ffmpeg \
 	'-i' "$1" \
 	'-map' '0:v' \
 	'-map' '0:a:0' \
@@ -359,7 +478,17 @@ ac3 () {
 	'-c:a:1' 'ac3' \
 	'-b:a:1' '640k' \
 	'-v' 'fatal' '-stats' \
-	"$2"
+	"$2" 2>&1 | tee -a "$ENCWD"/out.txt &)
+	sleep 1
+	ac3pid=$(ps -ef | grep 'AC3 640kbps -metadata:s:a:1 language' | grep -v grep | tr -s ' ' | cut -d ' ' -f3)
+	trap "kill $ac3pid 2> /dev/null" EXIT
+	while kill -0 $ac3pid 2> /dev/null; do
+		echo
+		timeleft "$3"
+		echo
+		sleep 2
+	done
+	trap - EXIT
 }
 
 # Strip audio stream
@@ -566,9 +695,10 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 	## 1. TrueHD 7.1 to EAC3 7.1
 
 			1)
-	
+			
 			clear
-			border "a:0 TrueHD 7.1 to a:1 EAC3 7.1"
+			thdheading='a:0 TrueHD 7.1 to a:1 EAC3 7.1'
+			border "${thdheading}"
 			echo
 			if [ "$AFORMAT0" = "truehd" ]; then
 				if [ "$ALAYOUT0" = "7.1" ]; then
@@ -583,14 +713,13 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 						if [ "$THDANS" = "y" ] || [ "$THDANS" = "Y" ];
 						then
 							echo
-							echo "${C}Duration of a:0${D}: $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV")"
-							echo
-							thd "$INMKV" "$OUTMKV"
+							thd "$INMKV" "$OUTMKV" "$thdheading"
 							echo
 							echo "Complete!"
 							echo
 							outputinfo "$OUTMKV"
 							echo
+							rm "$ENCWD"/out.txt
 							break
 						elif [ "$THDANS" = "n" ] || [ "$THDANS" = "N" ];
 						then
@@ -624,7 +753,8 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 			2)
 	
 			clear
-			border "a:0 DTS 7.1 to a:1 EAC3 7.1"
+			dtsheading='a:0 DTS 7.1 to a:1 EAC3 7.1'
+			border "${dtsheading}"
 			echo
 			if [ "$AFORMAT0" = "dts" ]; then
 				if [ "$ALAYOUT0" = "7.1" ]; then
@@ -639,14 +769,13 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 						if [ "$DTSANS" = "y" ] || [ "$DTSANS" = "Y" ];
 						then
 							echo
-							echo "${C}Duration of a:0${D}: $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV")"
-							echo
-							dts "$INMKV" "$OUTMKV"
+							dts "$INMKV" "$OUTMKV" "$dtsheading"
 							echo
 							echo "Complete!"
 							echo
 							outputinfo "$OUTMKV"
 							echo
+							rm "$ENCWD"/out.txt
 							break
 						elif [ "$DTSANS" = "n" ] || [ "$DTSANS" = "N" ];
 						then
@@ -680,7 +809,8 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 			3)
 		
 			clear
-			border "a:0 Any to a:1 EAC3 5.1 and below"
+			eac3heading='a:0 Any to a:1 EAC3 5.1 and below'
+			border "${eac3heading}"
 			echo
 			if [ "$ALAYOUT0" = "7.1" ]; then
 				echo "${R}WARNING${D}: a:0 is a 7.1 ${AFORMAT0} stream. Please use option 1 or 2 to encode an EAC3 7.1 track from TrueHD or DTS."
@@ -698,14 +828,13 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 				if [ "$EAC3ANS" = "y" ] || [ "$EAC3ANS" = "Y" ];
 				then
 					echo
-					echo "${C}Duration${D}: $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV")"
-					echo
-					eac3 "$INMKV" "$OUTMKV"
+					eac3 "$INMKV" "$OUTMKV" "$eac3heading"
 					echo
 					echo "Complete!"
 					echo
 					outputinfo "$OUTMKV"
 					echo
+					rm "$ENCWD"/out.txt
 					break
 				elif [ "$EAC3ANS" = "n" ] || [ "$EAC3ANS" = "N" ];
 				then
@@ -727,7 +856,8 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 			4)
 		
 			clear
-			border "a:0 Any to a:1 AC3 5.1 and below"
+			ac3heading='a:0 Any to a:1 AC3 5.1 and below'
+			border "${ac3heading}"
 			echo
 			if [ "$ALAYOUT0" = "7.1" ]; then
 				echo "${R}WARNING${D}: a:0 is a 7.1 ${AFORMAT0} stream. AC3 doesn't support more than 5.1 channels."
@@ -745,14 +875,13 @@ if [[ $# -eq 2 ]] && [[ -s "$INMKV" ]] && [ ! -s "$OUTMKV" ]; then
 				if [ "$AC3ANS" = "y" ] || [ "$AC3ANS" = "Y" ];
 				then
 					echo
-					echo "${C}Duration${D}: $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV")"
-					echo
-					ac3 "$INMKV" "$OUTMKV"
+					ac3 "$INMKV" "$OUTMKV" "$ac3heading"
 					echo
 					echo "Complete!"
 					echo
 					outputinfo "$OUTMKV"
 					echo
+					rm "$ENCWD"/out.txt
 					break
 				elif [ "$AC3ANS" = "n" ] || [ "$AC3ANS" = "N" ];
 				then
