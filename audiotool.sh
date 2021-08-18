@@ -276,7 +276,15 @@ timeleft () {
 	speed=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*speed=//; s/x.*//')
 	elapsed=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*time=//; s/\..*//')
 	sizekb=$(tail -n 1 "$ENCWD"/out.txt | sed 's/.*size=//; s/k.*//')
-	duration=$(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//')
+	if [ ! -z $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//') ]
+	then
+		duration=$(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//')
+	elif [ ! -z $(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration-eng -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//') ]
+	then
+		duration=$(ffprobe -loglevel error -select_streams a:0 -show_entries stream_tags=duration-eng -of default=nw=1:nk=1 "$INMKV" | sed 's/\..*//')
+	else
+		duration="00:00:00"
+	fi	
 	durationseconds=$(echo "$duration" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
 	timeleftseconds=$(echo "$durationseconds / $speed" | bc)
 	timeleftminutes=$(sec2min "$timeleftseconds")
